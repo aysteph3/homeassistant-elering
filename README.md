@@ -1,147 +1,149 @@
-# Elering Estfeed – Home Assistant Integration
+# Elering Estfeed for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/v/release/kaarelkelk/homeassistant-elering)](https://github.com/kaarelkelk/homeassistant-elering/releases)
+[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![Release](https://img.shields.io/github/v/release/kaarelkelk/homeassistant-elering)](https://github.com/kaarelkelk/homeassistant-elering/releases)
+[![License](https://img.shields.io/github/license/kaarelkelk/homeassistant-elering)](LICENSE)
 
-Custom [Home Assistant](https://www.home-assistant.io/) integration for the [Elering Estfeed](https://estfeed.elering.ee) API.
-Monitor your electricity and gas metering data directly in Home Assistant using your own Estfeed API credentials.
+A production-minded custom integration for [Home Assistant](https://www.home-assistant.io/) that connects to the Elering Estfeed/Datahub API and exposes metering data as sensors.
+
+> This integration uses **official API credentials** (OAuth2 client credentials) for Estfeed access. It is **not** a Smart-ID/browser login automation for the consumer portal.
 
 ## Features
 
-- **OAuth2 authentication** – client-credentials flow against the Elering SSO.
-- **Metering point discovery** – automatically lists all EIC codes your credentials can access.
-- **Dynamic sensors** – every numeric metric in the API response becomes a Home Assistant sensor (energy, power, etc.).
-- **Rate limiting** – respects the Estfeed 1-request-per-5-seconds limit, with diagnostic sensors for visibility.
-- **Historical backfill** – fetches and caches up to 365 days of historical data locally.
-- **Options flow** – adjust scan interval, data resolution, backfill depth, and commodity toggles without re-adding the integration.
+- OAuth2 client-credentials authentication against Elering SSO
+- Guided config flow with metering point (EIC) discovery
+- Dynamic sensor creation from numeric metering fields returned by the API
+- Built-in client-side rate limiting and retry handling
+- Optional historical backfill with local cache in Home Assistant storage
+- Reauthentication and options flow support (scan interval, resolution, commodity toggles)
+- Diagnostics support with secret redaction
 
-## Installation
+## Requirements / Prerequisites
 
-### HACS (recommended)
+Before setup, ensure you have:
 
-1. Open **HACS** in your Home Assistant instance.
-2. Go to **Integrations** → click the **⋮** menu (top-right) → **Custom repositories**.
-3. Paste the repository URL:
+- A working Home Assistant installation (minimum version is defined in `manifest.json`)
+- Valid Estfeed/Datahub technical API credentials:
+  - `client_id`
+  - `client_secret`
+- Access rights to at least one metering point (EIC) via those credentials
 
-   ```
-   https://github.com/kaarelkelk/homeassistant-elering
-   ```
+If you only use the Elering consumer web portal login flow (for example Smart-ID in a browser), request API-oriented credentials/access first.
 
-4. Select category **Integration** and click **Add**.
-5. Close the dialog, then search for **Elering Estfeed** in HACS and click **Install**.
-6. **Restart Home Assistant**.
+## Installation via HACS (Recommended)
 
-### Manual installation
+1. Open **HACS** in Home Assistant.
+2. Go to **Integrations** → **⋮** → **Custom repositories**.
+3. Add this repository URL:
+   - `https://github.com/kaarelkelk/homeassistant-elering`
+4. Category: **Integration**.
+5. Install **Elering Estfeed** from HACS.
+6. Restart Home Assistant.
 
-1. Download the [latest release](https://github.com/kaarelkelk/homeassistant-elering/releases) or clone this repository.
-2. Copy the `custom_components/elering_estfeed` folder into your Home Assistant `config/custom_components/` directory.
-3. **Restart Home Assistant**.
+## Manual Installation
 
-## Configuration
+1. Download the latest release from GitHub.
+2. Copy `custom_components/elering_estfeed` to:
+   - `<config>/custom_components/elering_estfeed`
+3. Restart Home Assistant.
 
-1. Go to **Settings** → **Devices & Services** → **Add Integration**.
-2. Search for **Elering Estfeed**.
-3. Enter your credentials:
-   | Field | Description | Default |
-   |---|---|---|
-   | **API Host** | Base URL of the Estfeed API | `https://estfeed.elering.ee` |
-   | **Client ID** | Your OAuth2 client ID | — |
-   | **Client Secret** | Your OAuth2 client secret | — |
-4. Select the metering point (EIC) you want to monitor.
-5. The integration creates sensors automatically based on the API response.
+## Configuration / Setup
 
-### Options
+1. In Home Assistant, open **Settings → Devices & Services**.
+2. Click **Add Integration** and select **Elering Estfeed**.
+3. Enter:
+   - API host (default: `https://estfeed.elering.ee`)
+   - Client ID
+   - Client Secret
+4. Select the discovered metering point (EIC).
+5. Complete setup; sensors are created automatically.
 
-After initial setup, click **Configure** on the integration card to adjust:
+### Options after setup
 
-| Option | Description | Default |
-|---|---|---|
-| **Scan interval** | How often to poll the API (60–3600 s) | `300` |
-| **Data resolution** | Granularity: 15 min, 1 hour, 1 week, 1 month | `1h` |
-| **History backfill days** | Days of history to fetch on setup (0 = disabled) | `90` |
-| **Enable electricity** | Toggle electricity metering points on/off | `true` |
-| **Enable gas** | Toggle gas metering points on/off | `true` |
+Use **Configure** on the integration card to adjust:
 
-### Services
+- Scan interval
+- Data resolution (`15min`, `1h`, `1w`, `1m`)
+- History backfill days
+- Commodity toggles (electricity/gas)
 
-| Service | Description |
-|---|---|
-| `elering_estfeed.fetch_history` | Manually fetch historical data (1–365 days). Cached locally. |
+## Authentication
 
-## Sensors
+This integration authenticates using OAuth2 `client_credentials` against Elering SSO token endpoint(s), then uses that token for Estfeed API calls.
 
-The integration creates sensors dynamically based on the data returned by the API:
+- Credentials are provided during config flow.
+- Token usage is cached with early refresh handling.
+- Reauthentication flow is supported if credentials change.
 
-- **Metering sensors** – one per numeric field (e.g. `energyIn`, `energyOut`, `reactivePower`). Device class and unit are inferred automatically.
-- **Rate-limit diagnostics** – last request time, next allowed time, blocked count, and server rate-limit headers (if returned).
-- **History diagnostics** – whether cached history is available and how many data-points are stored.
+Again: this is API credential auth, not browser-session or Smart-ID portal scraping.
 
-## Local development
+## Data / Entities Provided
 
-```bash
-# Clone the repo
-git clone https://github.com/kaarelkelk/homeassistant-elering.git
-cd homeassistant-elering
+The integration creates entities per configured metering point:
 
-# Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+- **Metering sensors:** numeric values from Estfeed payloads (for example energy/power-related fields when present)
+- **Rate-limit diagnostic sensors:** request timing and blocked-request counters; optional server rate-limit headers when returned
+- **History diagnostic sensors:** cache availability and cached point count
 
-# Install runtime + dev dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-```
+It also registers service:
 
-### Running in a Home Assistant dev container
+- `elering_estfeed.fetch_history` — manually trigger historical fetch (1–365 days)
 
-Mount or symlink `custom_components/elering_estfeed` into the container's `config/custom_components/` path and restart Home Assistant.
-Runtime dependencies listed in `manifest.json` are installed automatically by HA on first load.
+## Security & Privacy Notes
 
-### Linting & formatting
+- API host validation is restricted to HTTPS and `*.elering.ee`
+- Sensitive fields are redacted in diagnostics output
+- EIC values in diagnostics are partially masked
+- Entity unique IDs are derived from hashed EIC values for privacy-oriented identifiers
 
-```bash
-ruff check custom_components/ tests/
-black --check custom_components/ tests/
-```
+As with any Home Assistant custom integration, protect your HA instance, backups, and secrets.
 
-### Tests
+## Troubleshooting
 
-```bash
-pytest
-```
+If setup or updates fail:
 
-## Project structure
+1. Verify client credentials are valid and have Datahub/Estfeed API rights.
+2. Confirm API host is correct and reachable.
+3. Check Home Assistant logs for `custom_components.elering_estfeed`.
+4. Use **Reconfigure/Reauthenticate** from the integration card if credentials changed.
+5. If you see sparse data, verify EIC access scope and selected commodity.
 
-```
-homeassistant-elering/
-├── custom_components/
-│   └── elering_estfeed/
-│       ├── __init__.py          # Integration setup & service registration
-│       ├── api.py               # API client (OAuth2, rate limiting, endpoints)
-│       ├── config_flow.py       # Config flow + options flow
-│       ├── const.py             # Constants & default values
-│       ├── coordinator.py       # DataUpdateCoordinator
-│       ├── diagnostics.py       # Diagnostics dump (redacts secrets)
-│       ├── history.py           # Historical data backfill & local cache
-│       ├── manifest.json        # HA integration manifest
-│       ├── sensor.py            # Dynamic sensor platform
-│       ├── services.yaml        # Service definitions (UI)
-│       ├── strings.json         # i18n source strings
-│       └── translations/
-│           └── en.json          # English translations
-├── tests/
-│   ├── conftest.py              # Shared test fixtures
-│   ├── test_config_flow.py      # Config flow tests
-│   ├── test_coordinator.py      # Coordinator tests
-│   └── test_rate_limiter.py     # Rate limiter tests
-├── hacs.json                    # HACS metadata
-├── pyproject.toml               # Tooling config (pytest, ruff, black)
-├── requirements.txt             # Runtime dependencies
-├── requirements-dev.txt         # Development dependencies
-├── LICENSE                      # MIT
-└── README.md
-```
+## Diagnostics
 
-## License
+Home Assistant diagnostics are supported for this integration and are intended for safe issue reporting:
 
-[MIT](LICENSE)
+- Credentials are redacted
+- EIC is masked
+- Payload diagnostics are summarized/sanitized
+
+Even with redaction, review exported diagnostics before sharing publicly.
+
+## Limitations
+
+- Requires API-level Estfeed/Datahub access (not just consumer portal access)
+- Data availability and fields depend on the metering point and API response
+- Polling integrations are subject to network/API availability and rate limits
+- This integration is not part of Home Assistant Core
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+When contributing:
+
+- Keep changes focused and testable
+- Include clear reproduction steps for bug reports
+- Avoid including secrets or full unredacted diagnostics in tickets
+
+## Release Checklist
+
+See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for a short pre-release checklist (HACS metadata, structure, config flow, diagnostics safety, README rendering, release creation).
+
+## Disclaimer
+
+This is an independent community custom integration and is not officially endorsed by Elering or the Home Assistant project.
+
+## Support
+
+- Open an issue: <https://github.com/kaarelkelk/homeassistant-elering/issues>
+- If this project helps you, consider starring the repository to support maintenance.
