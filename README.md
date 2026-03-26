@@ -1,8 +1,8 @@
 # Elering Estfeed for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Release](https://img.shields.io/github/v/release/kaarelkelk/homeassistant-elering)](https://github.com/kaarelkelk/homeassistant-elering/releases)
-[![License](https://img.shields.io/github/license/kaarelkelk/homeassistant-elering)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/aysteph3/homeassistant-elering)](https://github.com/aysteph3/homeassistant-elering/releases)
+[![License](https://img.shields.io/github/license/aysteph3/homeassistant-elering)](LICENSE)
 
 A production-minded custom integration for [Home Assistant](https://www.home-assistant.io/) that connects to the Elering Estfeed/Datahub API and exposes metering data as sensors.
 
