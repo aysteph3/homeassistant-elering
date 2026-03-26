@@ -35,7 +35,7 @@ If you only use the Elering consumer web portal login flow (for example Smart-ID
 1. Open **HACS** in Home Assistant.
 2. Go to **Integrations** → **⋮** → **Custom repositories**.
 3. Add this repository URL:
-   - `https://github.com/kaarelkelk/homeassistant-elering`
+   - `https://github.com/aysteph3/homeassistant-elering`
 4. Category: **Integration**.
 5. Install **Elering Estfeed** from HACS.
 6. Restart Home Assistant.
@@ -145,5 +145,5 @@ This is an independent community custom integration and is not officially endors
 
 ## Support
 
-- Open an issue: <https://github.com/kaarelkelk/homeassistant-elering/issues>
+- Open an issue: <https://github.com/aysteph3/homeassistant-elering/issues>
 - If this project helps you, consider starring the repository to support maintenance.
