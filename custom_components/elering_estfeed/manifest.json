@@ -1,13 +1,13 @@
 {
   "domain": "elering_estfeed",
   "name": "Elering Estfeed",
-  "codeowners": ["@kaarelkelk"],
+  "codeowners": ["@aysteph3"],
   "config_flow": true,
-  "documentation": "https://github.com/kaarelkelk/homeassistant-elering",
+  "documentation": "https://github.com/aysteph3/homeassistant-elering",
   "homeassistant": "2024.1.0",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/kaarelkelk/homeassistant-elering/issues",
+  "issue_tracker": "https://github.com/aysteph3/homeassistant-elering/issues",
   "loggers": ["custom_components.elering_estfeed"],
   "requirements": [],
   "version": "1.0.0"
