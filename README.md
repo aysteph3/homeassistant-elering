@@ -147,3 +147,11 @@ This is an independent community custom integration and is not officially endors
 
 - Open an issue: <https://github.com/aysteph3/homeassistant-elering/issues>
 - If this project helps you, consider starring the repository to support maintenance.
+
+## 🙏 Credits
+
+This integration is based on the work of  
+[KaarelKelk/homeassistant-elering](https://github.com/KaarelKelk/homeassistant-elering).
+
+The original project provided the foundation for this implementation.  
+This version includes additional improvements such as security hardening, diagnostics safety, and enhanced reliability.
