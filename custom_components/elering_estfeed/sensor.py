@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from hashlib import blake2b
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -16,6 +17,7 @@ from homeassistant.const import EntityCategory, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -118,11 +120,20 @@ def _build_device_info(eic: str, commodity: str) -> DeviceInfo:
     commodity_label = _COMMODITY_LABELS.get(commodity, commodity)
     return DeviceInfo(
         identifiers={(DOMAIN, eic)},
-        name=f"Estfeed {eic} ({commodity_label})" if commodity_label else f"Estfeed {eic}",
+        name=(
+            f"Estfeed Meter ({commodity_label})"
+            if commodity_label
+            else "Estfeed Meter"
+        ),
         manufacturer="Elering",
         model="Estfeed Metering Point",
         entry_type=DeviceEntryType.SERVICE,
     )
+
+
+def _eic_hash(eic: str) -> str:
+    """Return a short stable privacy-safe ID derived from EIC."""
+    return blake2b(eic.encode(), digest_size=6).hexdigest()
 
 
 # ------------------------------------------------------------------
@@ -221,6 +232,16 @@ async def async_setup_entry(
         ],
     )
 
+    ent_reg = er.async_get(hass)
+    for entity in entities:
+        old_unique_id = getattr(entity, "legacy_unique_id", None)
+        new_unique_id = getattr(entity, "unique_id", None)
+        if not old_unique_id or not new_unique_id or old_unique_id == new_unique_id:
+            continue
+        entity_id = ent_reg.async_get_entity_id("sensor", DOMAIN, old_unique_id)
+        if entity_id:
+            ent_reg.async_update_entity(entity_id, new_unique_id=new_unique_id)
+
     async_add_entities(entities)
 
 
@@ -253,9 +274,11 @@ class EleringEstfeedSensor(
         """Initialise the sensor."""
         super().__init__(coordinator)
         self.metric_key = metric_key
+        eic_id = _eic_hash(eic)
 
-        self._attr_unique_id = f"{eic}_{commodity.lower()}_{metric_key}".lower()
-        self._attr_name = f"{eic} {commodity_label} {sensor_name}"
+        self.legacy_unique_id = f"{eic}_{commodity.lower()}_{metric_key}".lower()
+        self._attr_unique_id = f"{eic_id}_{commodity.lower()}_{metric_key}".lower()
+        self._attr_name = f"{commodity_label} {sensor_name}"
         self._attr_device_class = device_class
         self._attr_state_class = state_class
         self._attr_native_unit_of_measurement = native_unit
@@ -298,8 +321,10 @@ class EleringRateLimitSensor(
         """Initialise the diagnostic sensor."""
         super().__init__(coordinator)
         self._diag_key = diag_key
+        eic_id = _eic_hash(eic)
 
-        self._attr_unique_id = f"{eic}_diag_{diag_key}".lower()
+        self.legacy_unique_id = f"{eic}_diag_{diag_key}".lower()
+        self._attr_unique_id = f"{eic_id}_diag_{diag_key}".lower()
         self._attr_name = f"Estfeed {sensor_name}"
         self._attr_device_class = device_class
         self._attr_device_info = device_info
@@ -340,8 +365,10 @@ class EleringHistorySensor(
         """Initialise the history diagnostic sensor."""
         super().__init__(coordinator)
         self._diag_key = diag_key
+        eic_id = _eic_hash(eic)
 
-        self._attr_unique_id = f"{eic}_diag_{diag_key}".lower()
+        self.legacy_unique_id = f"{eic}_diag_{diag_key}".lower()
+        self._attr_unique_id = f"{eic_id}_diag_{diag_key}".lower()
         self._attr_name = f"Estfeed {sensor_name}"
         self._attr_device_info = device_info
 

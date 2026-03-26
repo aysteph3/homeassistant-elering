@@ -8,12 +8,13 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
 
-from .api import EleringEstfeedApiClient, EleringEstfeedError
+from .api import EleringAuthError, EleringEstfeedApiClient, EleringEstfeedError
 from .const import DEFAULT_DATA_WINDOW_HOURS, DEFAULT_RESOLUTION, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .history import EleringHistoryStore
 
@@ -75,6 +76,10 @@ class EleringEstfeedCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 end=now,
                 resolution=self.resolution,
             )
+        except EleringAuthError as err:
+            raise ConfigEntryAuthFailed(
+                f"Authentication failed for EIC {self.eic}: {err}"
+            ) from err
         except EleringEstfeedError as err:
             raise UpdateFailed(
                 f"Error fetching metering data for {self.eic}: {err}"

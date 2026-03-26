@@ -1,5 +1,9 @@
 """Constants for the Elering Estfeed integration."""
 
+from __future__ import annotations
+
+from typing import Final
+
 DOMAIN = "elering_estfeed"
 
 # Config-entry keys (set during initial setup, immutable)
@@ -52,3 +56,11 @@ TOKEN_EXPIRY_MARGIN = 30
 
 # Client-side rate limiting (seconds between API requests).
 RATE_LIMIT_SECONDS = 5
+
+# HTTP hardening
+REQUEST_TIMEOUT_SECONDS = 20
+REQUEST_RETRY_ATTEMPTS = 3
+REQUEST_RETRY_BASE_DELAY_SECONDS = 1.0
+
+# History retention hardening
+MAX_HISTORY_RETENTION_DAYS: Final[int] = 400

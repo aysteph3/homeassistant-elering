@@ -21,6 +21,7 @@ from .api import (
     EleringConnectionError,
     EleringEstfeedApiClient,
     EleringEstfeedError,
+    is_valid_api_host,
 )
 from .const import (
     CONF_API_HOST,
@@ -67,6 +68,7 @@ class EleringEstfeedConfigFlow(ConfigFlow, domain=DOMAIN):
         self._user_input: dict[str, Any] = {}
         self._client: EleringEstfeedApiClient | None = None
         self._metering_points: list[dict[str, Any]] = []
+        self._reauth_entry: ConfigEntry | None = None
 
     # ------------------------------------------------------------------
     # Step 1 – credentials
@@ -80,6 +82,14 @@ class EleringEstfeedConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            if not is_valid_api_host(user_input[CONF_API_HOST]):
+                errors["base"] = "invalid_api_host"
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=STEP_USER_DATA_SCHEMA,
+                    errors=errors,
+                )
+
             session = async_get_clientsession(self.hass)
             client = EleringEstfeedApiClient(
                 api_host=user_input[CONF_API_HOST],
@@ -165,6 +175,69 @@ class EleringEstfeedConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="select_eic",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Start reauthentication flow."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            entry_data["entry_id"]
+        )
+        self._user_input = {
+            CONF_API_HOST: entry_data.get(CONF_API_HOST, DEFAULT_API_HOST),
+            CONF_CLIENT_ID: entry_data.get(CONF_CLIENT_ID, ""),
+            CONF_CLIENT_SECRET: "",
+        }
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle reauthentication confirmation."""
+        errors: dict[str, str] = {}
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_API_HOST,
+                    default=self._user_input.get(CONF_API_HOST, DEFAULT_API_HOST),
+                ): str,
+                vol.Required(
+                    CONF_CLIENT_ID,
+                    default=self._user_input.get(CONF_CLIENT_ID, ""),
+                ): str,
+                vol.Required(CONF_CLIENT_SECRET): str,
+            }
+        )
+
+        if user_input is not None:
+            if not is_valid_api_host(user_input[CONF_API_HOST]):
+                errors["base"] = "invalid_api_host"
+            else:
+                session = async_get_clientsession(self.hass)
+                client = EleringEstfeedApiClient(
+                    api_host=user_input[CONF_API_HOST],
+                    client_id=user_input[CONF_CLIENT_ID],
+                    client_secret=user_input[CONF_CLIENT_SECRET],
+                    session=session,
+                )
+                error = await self._async_validate_credentials(client)
+                if error:
+                    errors["base"] = error
+                elif self._reauth_entry is not None:
+                    self.hass.config_entries.async_update_entry(
+                        self._reauth_entry,
+                        data={**self._reauth_entry.data, **user_input},
+                    )
+                    await self.hass.config_entries.async_reload(
+                        self._reauth_entry.entry_id
+                    )
+                    return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
             data_schema=schema,
             errors=errors,
         )
