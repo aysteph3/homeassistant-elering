@@ -121,3 +121,21 @@ async def test_config_flow_invalid_auth(
 
         assert result["type"] == "form"
         assert result["errors"]["base"] == "invalid_auth"
+
+
+@pytest.mark.asyncio
+async def test_config_flow_invalid_api_host() -> None:
+    """Test that non-HTTPS/non-Elering hosts are rejected."""
+    flow = _flow()
+    flow.hass = AsyncMock()
+
+    result = await flow.async_step_user(
+        user_input={
+            CONF_API_HOST: "http://evil.example.com",
+            CONF_CLIENT_ID: MOCK_CLIENT_ID,
+            CONF_CLIENT_SECRET: MOCK_CLIENT_SECRET,
+        }
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"]["base"] == "invalid_api_host"

@@ -7,6 +7,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -15,6 +16,9 @@ from .const import (
     DEFAULT_TOKEN_URL,
     METERING_DATA_PATH,
     METERING_POINTS_PATH,
+    REQUEST_RETRY_ATTEMPTS,
+    REQUEST_RETRY_BASE_DELAY_SECONDS,
+    REQUEST_TIMEOUT_SECONDS,
     RATE_LIMIT_SECONDS,
     TOKEN_EXPIRY_MARGIN,
 )
@@ -39,6 +43,25 @@ class EleringConnectionError(EleringEstfeedError):
     """Raised when an endpoint is unreachable."""
 
 
+def is_valid_api_host(host: str) -> bool:
+    """Validate API host format and safety constraints.
+
+    Must be HTTPS and under *.elering.ee.
+    """
+    try:
+        parsed = urlparse(host)
+    except ValueError:
+        return False
+
+    if parsed.scheme != "https":
+        return False
+    if not parsed.hostname:
+        return False
+    return parsed.hostname == "elering.ee" or parsed.hostname.endswith(
+        ".elering.ee"
+    )
+
+
 class EleringEstfeedApiClient:
     """API client for Elering Estfeed with OAuth2 client-credentials auth."""
 
@@ -54,10 +77,12 @@ class EleringEstfeedApiClient:
         self._client_id = client_id
         self._client_secret = client_secret
         self._session = session
+        self._timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
 
         # Token cache
         self._access_token: str | None = None
         self._token_expiry: float = 0.0  # monotonic clock
+        self._token_lock = asyncio.Lock()
 
         # Rate-limit state
         self._next_allowed_mono: float = 0.0
@@ -121,57 +146,94 @@ class EleringEstfeedApiClient:
             _LOGGER.debug("Using cached access token (still valid)")
             return self._access_token
 
-        _LOGGER.debug("Requesting new access token from %s", DEFAULT_TOKEN_URL)
+        async with self._token_lock:
+            now = time.monotonic()
+            if self._access_token is not None and now < self._token_expiry:
+                return self._access_token
 
-        payload = {
-            "grant_type": "client_credentials",
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
-        }
+            _LOGGER.debug("Requesting new access token from %s", DEFAULT_TOKEN_URL)
 
-        try:
-            async with self._session.post(
-                DEFAULT_TOKEN_URL,
-                data=payload,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            ) as resp:
-                body = await resp.text()
+            payload = {
+                "grant_type": "client_credentials",
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            }
 
-                if resp.status in (401, 403):
-                    _LOGGER.error(
-                        "Authentication failed (HTTP %s) from %s – "
-                        "verify your client_id and client_secret are correct. "
-                        "Response: %s",
-                        resp.status,
+            result: dict[str, Any] | None = None
+            for attempt in range(1, REQUEST_RETRY_ATTEMPTS + 1):
+                try:
+                    async with self._session.post(
                         DEFAULT_TOKEN_URL,
-                        body,
-                    )
-                    raise EleringAuthError(
-                        f"Authentication failed (HTTP {resp.status}): {body}"
-                    )
+                        data=payload,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        timeout=self._timeout,
+                    ) as resp:
+                        if resp.status in (401, 403):
+                            _LOGGER.error(
+                                "Authentication failed (HTTP %s) from %s; "
+                                "verify client credentials",
+                                resp.status,
+                                DEFAULT_TOKEN_URL,
+                            )
+                            raise EleringAuthError(
+                                f"Authentication failed (HTTP {resp.status})"
+                            )
 
-                if resp.status != 200:
-                    _LOGGER.error(
-                        "Token request to %s failed (HTTP %s). Response: %s",
-                        DEFAULT_TOKEN_URL,
-                        resp.status,
-                        body,
-                    )
-                    raise EleringEstfeedError(
-                        f"Token request failed (HTTP {resp.status}): {body}"
-                    )
+                        if resp.status == 429 or resp.status >= 500:
+                            if attempt < REQUEST_RETRY_ATTEMPTS:
+                                delay = REQUEST_RETRY_BASE_DELAY_SECONDS * (
+                                    2 ** (attempt - 1)
+                                )
+                                _LOGGER.warning(
+                                    "Token endpoint transient error (HTTP %s), "
+                                    "retrying in %.1fs (attempt %d/%d)",
+                                    resp.status,
+                                    delay,
+                                    attempt,
+                                    REQUEST_RETRY_ATTEMPTS,
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            raise EleringConnectionError(
+                                f"Token endpoint transient failure (HTTP {resp.status})"
+                            )
 
-                result: dict[str, Any] = await resp.json(content_type=None)
+                        if resp.status != 200:
+                            _LOGGER.error(
+                                "Token request to %s failed (HTTP %s)",
+                                DEFAULT_TOKEN_URL,
+                                resp.status,
+                            )
+                            raise EleringEstfeedError(
+                                f"Token request failed (HTTP {resp.status})"
+                            )
 
-        except EleringEstfeedError:
-            raise
-        except aiohttp.ClientError as err:
-            _LOGGER.error(
-                "Cannot reach token endpoint %s: %s", DEFAULT_TOKEN_URL, err
-            )
-            raise EleringConnectionError(
-                f"Cannot reach token endpoint {DEFAULT_TOKEN_URL}: {err}"
-            ) from err
+                        result = await resp.json(content_type=None)
+                        break
+
+                except EleringEstfeedError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                    if attempt < REQUEST_RETRY_ATTEMPTS:
+                        delay = REQUEST_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                        _LOGGER.warning(
+                            "Cannot reach token endpoint %s (%s), retrying in %.1fs "
+                            "(attempt %d/%d)",
+                            DEFAULT_TOKEN_URL,
+                            err.__class__.__name__,
+                            delay,
+                            attempt,
+                            REQUEST_RETRY_ATTEMPTS,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise EleringConnectionError(
+                        f"Cannot reach token endpoint {DEFAULT_TOKEN_URL}: "
+                        f"{err.__class__.__name__}"
+                    ) from err
+
+            if result is None:
+                raise EleringConnectionError("Token request failed after retries")
 
         access_token = result.get("access_token")
         if not access_token:
@@ -256,59 +318,93 @@ class EleringEstfeedApiClient:
         token = await self.async_get_access_token()
         url = f"{self._api_host}{path}"
 
-        _LOGGER.debug("API %s %s params=%s", method, url, params)
+        _LOGGER.debug("API %s %s", method, url)
 
-        try:
-            async with self._session.request(
-                method,
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                params=params,
-            ) as resp:
-                body = await resp.text()
+        for attempt in range(1, REQUEST_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session.request(
+                    method,
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                    timeout=self._timeout,
+                ) as resp:
+                    # Record timing AFTER the request returns (even on errors).
+                    self._last_request_time = datetime.now(timezone.utc)
+                    self._next_allowed_mono = time.monotonic() + RATE_LIMIT_SECONDS
 
-                # Record timing AFTER the request returns (even on errors).
-                self._last_request_time = datetime.now(timezone.utc)
-                self._next_allowed_mono = (
-                    time.monotonic() + RATE_LIMIT_SECONDS
+                    # Capture server rate-limit headers.
+                    self._capture_rate_limit_headers(resp.headers)
+
+                    if resp.status in (401, 403):
+                        self._access_token = None
+                        _LOGGER.error(
+                            "API auth failed for %s (HTTP %s)",
+                            path,
+                            resp.status,
+                        )
+                        raise EleringAuthError(
+                            f"API auth failed (HTTP {resp.status})"
+                        )
+
+                    if resp.status == 429 or resp.status >= 500:
+                        if attempt < REQUEST_RETRY_ATTEMPTS:
+                            delay = REQUEST_RETRY_BASE_DELAY_SECONDS * (
+                                2 ** (attempt - 1)
+                            )
+                            _LOGGER.warning(
+                                "Transient API failure for %s (HTTP %s), "
+                                "retrying in %.1fs (attempt %d/%d)",
+                                path,
+                                resp.status,
+                                delay,
+                                attempt,
+                                REQUEST_RETRY_ATTEMPTS,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        raise EleringConnectionError(
+                            f"API transient failure for {path} (HTTP {resp.status})"
+                        )
+
+                    if resp.status != 200:
+                        _LOGGER.error(
+                            "API request failed for %s (HTTP %s)",
+                            path,
+                            resp.status,
+                        )
+                        raise EleringEstfeedError(
+                            f"API request failed for {path} (HTTP {resp.status})"
+                        )
+
+                    return await resp.json(content_type=None)
+
+            except EleringEstfeedError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                if attempt < REQUEST_RETRY_ATTEMPTS:
+                    delay = REQUEST_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                    _LOGGER.warning(
+                        "Cannot reach API endpoint %s (%s), retrying in %.1fs "
+                        "(attempt %d/%d)",
+                        path,
+                        err.__class__.__name__,
+                        delay,
+                        attempt,
+                        REQUEST_RETRY_ATTEMPTS,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                _LOGGER.error(
+                    "Cannot reach API endpoint %s after retries (%s)",
+                    path,
+                    err.__class__.__name__,
                 )
+                raise EleringConnectionError(
+                    f"Cannot reach API endpoint {url}: {err.__class__.__name__}"
+                ) from err
 
-                # Capture server rate-limit headers.
-                self._capture_rate_limit_headers(resp.headers)
-
-                if resp.status in (401, 403):
-                    self._access_token = None
-                    _LOGGER.error(
-                        "API request to %s returned HTTP %s – "
-                        "access token may be invalid. Response: %s",
-                        url,
-                        resp.status,
-                        body,
-                    )
-                    raise EleringAuthError(
-                        f"API auth failed (HTTP {resp.status}): {body}"
-                    )
-
-                if resp.status != 200:
-                    _LOGGER.error(
-                        "API request to %s failed (HTTP %s). Response: %s",
-                        url,
-                        resp.status,
-                        body,
-                    )
-                    raise EleringEstfeedError(
-                        f"API request failed (HTTP {resp.status}): {body}"
-                    )
-
-                return await resp.json(content_type=None)
-
-        except EleringEstfeedError:
-            raise
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Cannot reach API endpoint %s: %s", url, err)
-            raise EleringConnectionError(
-                f"Cannot reach API endpoint {url}: {err}"
-            ) from err
+        raise EleringConnectionError(f"API request failed after retries for {path}")
 
     # ------------------------------------------------------------------
     # Metering points
@@ -351,8 +447,19 @@ class EleringEstfeedApiClient:
                 METERING_POINTS_PATH,
             )
 
-        _LOGGER.debug("Fetched %d metering point(s)", len(points))
-        return points  # type: ignore[return-value]
+        validated: list[dict[str, Any]] = []
+        for point in points:
+            if not isinstance(point, dict):
+                _LOGGER.warning("Skipping metering point with invalid type")
+                continue
+            eic = point.get("eic")
+            if not isinstance(eic, str) or not eic.strip():
+                _LOGGER.warning("Skipping metering point with invalid EIC")
+                continue
+            validated.append(point)
+
+        _LOGGER.debug("Fetched %d metering point(s)", len(validated))
+        return validated
 
     # ------------------------------------------------------------------
     # Metering data
@@ -448,12 +555,29 @@ def _extract_measurements(
         if isinstance(item, dict) and "measurements" in item:
             item_eic = item.get("meteringPointEic") or item.get("eic") or ""
             if item_eic == eic:
-                return item["measurements"]  # type: ignore[no-any-return]
+                return _validate_measurements(item["measurements"])
             # If only one entry, use it regardless of EIC label.
             if len(data) == 1:
-                return item["measurements"]  # type: ignore[no-any-return]
+                return _validate_measurements(item["measurements"])
         else:
             # Looks like a flat list of measurements already.
-            return data  # type: ignore[return-value]
+            return _validate_measurements(data)
 
     return []
+
+
+def _validate_measurements(values: Any) -> list[dict[str, Any]]:
+    """Return only measurement dicts with at least a valid timestamp field."""
+    if not isinstance(values, list):
+        _LOGGER.warning("Unexpected measurements payload type: %s", type(values).__name__)
+        return []
+
+    valid: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        ts = item.get("timestamp")
+        if not isinstance(ts, str) or not ts:
+            continue
+        valid.append(item)
+    return valid

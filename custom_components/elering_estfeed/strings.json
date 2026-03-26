@@ -28,12 +28,27 @@
     },
     "error": {
       "invalid_auth": "Invalid client ID or client secret.",
+      "invalid_api_host": "API host must be an HTTPS Elering endpoint.",
       "cannot_connect": "Unable to reach the Estfeed API.",
       "no_metering_points": "No metering points found for these credentials.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This metering point is already configured."
+      "already_configured": "This metering point is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "reauth": {
+    "step": {
+      "reauth_confirm": {
+        "title": "Reconnect to Elering Estfeed",
+        "description": "Update credentials to restore access.",
+        "data": {
+          "api_host": "API Host",
+          "client_id": "Client ID",
+          "client_secret": "Client Secret"
+        }
+      }
     }
   },
   "options": {

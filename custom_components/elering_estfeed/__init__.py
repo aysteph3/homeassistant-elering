@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 
 import voluptuous as vol
 
@@ -10,9 +11,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import EleringConnectionError, EleringEstfeedApiClient
+from .api import (
+    EleringAuthError,
+    EleringConnectionError,
+    EleringEstfeedApiClient,
+    is_valid_api_host,
+)
 from .const import (
     CONF_API_HOST,
     CONF_CLIENT_ID,
@@ -69,6 +76,9 @@ def _get_options(entry: ConfigEntry) -> tuple[int, str, int, bool, bool]:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Elering Estfeed from a config entry."""
+    if not is_valid_api_host(entry.data[CONF_API_HOST]):
+        raise ConfigEntryNotReady("Configured API host is invalid or unsafe")
+
     session = async_get_clientsession(hass)
     client = EleringEstfeedApiClient(
         api_host=entry.data[CONF_API_HOST],
@@ -96,6 +106,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # so HA retries automatically instead of marking the entry as failed.
     try:
         await client.async_get_access_token()
+    except EleringAuthError as err:
+        raise ConfigEntryAuthFailed(
+            f"Authentication failed for EIC {eic}: {err}"
+        ) from err
     except EleringConnectionError as err:
         raise ConfigEntryNotReady(
             f"Cannot reach Elering API for EIC {eic}: {err}"
@@ -135,10 +149,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async def handle_fetch_history(call: ServiceCall) -> None:
             """Handle the fetch_history service call."""
             days: int = call.data.get("days", HISTORY_SERVICE_DEFAULT_DAYS)
-            for coord in hass.data.get(DOMAIN, {}).values():
-                if isinstance(coord, EleringEstfeedCoordinator):
-                    await coord.history.async_fetch_history(days)
-                    coord.async_set_updated_data(coord.data or {})
+            semaphore = asyncio.Semaphore(3)
+
+            async def _fetch_for(coord: EleringEstfeedCoordinator) -> None:
+                async with semaphore:
+                    try:
+                        await coord.history.async_fetch_history(days)
+                        coord.async_set_updated_data(coord.data or {})
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "History fetch service failed for EIC %s",
+                            coord.eic,
+                            exc_info=True,
+                        )
+
+            tasks = [
+                _fetch_for(coord)
+                for coord in hass.data.get(DOMAIN, {}).values()
+                if isinstance(coord, EleringEstfeedCoordinator)
+            ]
+            if tasks:
+                await asyncio.gather(*tasks)
 
         hass.services.async_register(
             DOMAIN,

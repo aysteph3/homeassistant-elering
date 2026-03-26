@@ -10,7 +10,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .api import EleringEstfeedApiClient
-from .const import API_MAX_WINDOW_DAYS, DOMAIN, STORAGE_VERSION
+from .const import (
+    API_MAX_WINDOW_DAYS,
+    DOMAIN,
+    MAX_HISTORY_RETENTION_DAYS,
+    STORAGE_VERSION,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +76,7 @@ class EleringHistoryStore:
         if data and isinstance(data, dict):
             self._measurements = data.get("measurements", [])
             self._last_fetch = data.get("last_fetch")
+            self._prune()
             _LOGGER.debug(
                 "Loaded %d cached history point(s) for EIC %s (last_fetch=%s)",
                 len(self._measurements),
@@ -147,6 +153,7 @@ class EleringHistoryStore:
 
         if all_new:
             self._merge(all_new)
+            self._prune()
             await self._async_save()
 
         _LOGGER.info(
@@ -177,3 +184,30 @@ class EleringHistoryStore:
         # Keep sorted ascending.
         self._measurements.sort(key=lambda m: m.get("timestamp", ""))
         _LOGGER.debug("Merged %d new point(s) into cache", added)
+
+    def _prune(self) -> None:
+        """Prune cached history to a bounded retention window."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_HISTORY_RETENTION_DAYS)
+        kept: list[dict[str, Any]] = []
+        for point in self._measurements:
+            ts = point.get("timestamp")
+            if not isinstance(ts, str):
+                continue
+            parsed = _parse_timestamp(ts)
+            if parsed and parsed >= cutoff:
+                kept.append(point)
+
+        pruned = len(self._measurements) - len(kept)
+        if pruned > 0:
+            _LOGGER.debug("Pruned %d old history point(s) for EIC %s", pruned, self._eic)
+        self._measurements = kept
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    """Parse common Estfeed timestamp formats safely."""
+    for pattern in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
+        try:
+            return datetime.strptime(value, pattern)
+        except ValueError:
+            continue
+    return None
